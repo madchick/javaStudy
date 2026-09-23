@@ -1,0 +1,12 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: webSocketTestServer
+
+logging:
+  level:
+    root: INFO
+    com.example.websocket: DEBUG
+    org.springframework.web.socket: DEBUG
