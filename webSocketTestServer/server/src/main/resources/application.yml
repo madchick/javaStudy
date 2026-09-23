@@ -9,4 +9,4 @@ logging:
   level:
     root: INFO
     com.example.websocket: DEBUG
-    org.springframework.web.socket: DEBUG
+    org.springframework.web.socket: INFO

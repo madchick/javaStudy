@@ -12,7 +12,9 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.io.EOFException;
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -88,6 +90,7 @@ public class CustomWebSocketHandler extends TextWebSocketHandler {
         switch (msg.type()) {
             case PING -> {
                 // 하트비트 PING에 대해 PONG 즉시 응답
+                log.debug("[WS Ping] Received from SessionId: {}, replying PONG", sessionId);
                 sendMessage(session, WsMessage.of(MessageType.PONG, "SYSTEM", "pong"));
             }
             case ECHO -> {
@@ -186,7 +189,53 @@ public class CustomWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
-        log.error("[WS Transport Error] SessionId: {}, Error: {}", session.getId(), exception.getMessage());
+        String sessionId = (session != null) ? session.getId() : "unknown";
+
+        if (isClientDisconnectException(exception)) {
+            // 브라우저 탭 닫기, 새로고침, 네트워크 단절 등 클라이언트의 비정상/갑작스러운 연결 종료
+            log.info("[WS Disconnect] Client closed connection abruptly (EOF/Reset). SessionId: {}", sessionId);
+        } else {
+            String errorMsg = (exception.getMessage() != null && !exception.getMessage().isBlank())
+                    ? exception.getMessage()
+                    : exception.getClass().getSimpleName();
+            log.warn("[WS Transport Error] SessionId: {}, Error: {}", sessionId, errorMsg);
+        }
+
+        if (session != null && session.isOpen()) {
+            try {
+                session.close(CloseStatus.SERVER_ERROR);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /**
+     * 클라이언트 연결 해제/네트워크 단절로 인한 일반적인 예외인지 판별
+     */
+    private boolean isClientDisconnectException(Throwable exception) {
+        Throwable current = exception;
+        while (current != null) {
+            if (current instanceof EOFException || current instanceof ClosedChannelException) {
+                return true;
+            }
+            String className = current.getClass().getName();
+            if (className.contains("ClientAbortException")) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null) {
+                String lower = message.toLowerCase();
+                if (lower.contains("broken pipe")
+                        || lower.contains("connection reset")
+                        || lower.contains("connection timed out")
+                        || lower.contains("closed")
+                        || lower.contains("forcibly closed")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     // 단일 세션 전송 (동시성 동기화)
@@ -202,7 +251,11 @@ public class CustomWebSocketHandler extends TextWebSocketHandler {
                 }
             }
         } catch (IOException e) {
-            log.error("[WS Send Error] Failed to send message to {}: {}", session.getId(), e.getMessage());
+            if (isClientDisconnectException(e)) {
+                log.debug("[WS Send] Session {} already disconnected: {}", session.getId(), e.getMessage());
+            } else {
+                log.error("[WS Send Error] Failed to send message to {}: {}", session.getId(), e.getMessage());
+            }
         }
     }
 
